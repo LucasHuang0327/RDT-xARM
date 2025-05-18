@@ -25,21 +25,21 @@ fi
 #     --deepspeed="./configs/zero2.json" \
 #     ...
 
-deepspeed --hostfile=hostfile.txt main.py \
-    --deepspeed="./configs/zero2.json" \
-    --pretrained_text_encoder_name_or_path=$TEXT_ENCODER_NAME \
-    --pretrained_vision_encoder_name_or_path=$VISION_ENCODER_NAME \
+deepspeed --hostfile=hostfile.txt main.py \     # 指定分布式訓練主機列表 
+    --deepspeed="./configs/zero2.json" \        # deepspeed的配置文件, 定義分布式訓練和內存優化策略（如 ZeRO 優化器）。
+    --pretrained_text_encoder_name_or_path=$TEXT_ENCODER_NAME \     # 預訓練的文本編碼器名稱
+    --pretrained_vision_encoder_name_or_path=$VISION_ENCODER_NAME \ # 預訓練的視覺編碼器名稱
     --output_dir=$OUTPUT_DIR \
-    --train_batch_size=32 \
-    --sample_batch_size=64 \
-    --max_train_steps=1000000 \
-    --checkpointing_period=1000 \
-    --sample_period=500 \
-    --checkpoints_total_limit=40 \
-    --lr_scheduler="constant" \
-    --learning_rate=1e-4 \
-    --mixed_precision="bf16" \
-    --dataloader_num_workers=8 \
+    --train_batch_size=32 \         # 訓練的batch size
+    --sample_batch_size=64 \        # 這是生成的batch size (可以理解為action chunk嗎? )
+    --max_train_steps=1000000 \     # 訓練的最大步數
+    --checkpointing_period=1000 \   # 每1000步保存一次檢查點
+    --sample_period=500 \           # 每500步生成一次樣本
+    --checkpoints_total_limit=40 \  # 最多保存40個檢查點
+    --lr_scheduler="constant" \     # 學習率調度器類型為constant
+    --learning_rate=1e-4 \          # 初始學習率
+    --mixed_precision="bf16" \      # 訓練精度使用bf16
+    --dataloader_num_workers=8 \    # 數據加載器的工作進程數量
     --dataset_type="pretrain" \
     --report_to=wandb
 

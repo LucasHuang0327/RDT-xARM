@@ -18,6 +18,8 @@ class HDF5VLADataset:
     def __init__(self) -> None:
         # [Modify] The path to the HDF5 dataset directory
         # Each HDF5 file contains one episode
+        
+        ## TODO
         HDF5_DIR = "data/datasets/agilex/rdt_data/"
         self.DATASET_NAME = "agilex"
         
@@ -26,7 +28,8 @@ class HDF5VLADataset:
             for filename in fnmatch.filter(files, '*.hdf5'):
                 file_path = os.path.join(root, filename)
                 self.file_paths.append(file_path)
-                
+
+        ## TODO, modify configs/base.yaml
         # Load the config
         with open('configs/base.yaml', 'r') as file:
             config = yaml.safe_load(file)
@@ -74,6 +77,9 @@ class HDF5VLADataset:
                 index = np.random.randint(0, len(self.file_paths))
     
     def parse_hdf5_file(self, file_path):
+        ## 輸入為HDF5格式文件, 但沒要求hdf5的內部文件格式
+        ## 對不同diffusion中的timestep都能生成訓練樣本
+        ## 輸出為valid, dict分別判斷episode是否有效, 以及提取episode的內容
         """[Modify] Parse a hdf5 file to generate a training sample at
             a random timestep.
 
@@ -113,6 +119,7 @@ class HDF5VLADataset:
                 } or None if the episode is invalid.
         """
         with h5py.File(file_path, 'r') as f:
+            # 以observations作枝存的qpos
             qpos = f['observations']['qpos'][:]
             num_steps = qpos.shape[0]
             # [Optional] We drop too-short episode
@@ -121,6 +128,7 @@ class HDF5VLADataset:
             
             # [Optional] We skip the first few still steps
             EPS = 1e-2
+            ## 取出值超過EPS的qpos, 以過濾 qpos 比 qpos[0:1] 差值少的 qpos
             # Get the idx of the first qpos whose delta exceeds the threshold
             qpos_delta = np.abs(qpos - qpos[0:1])
             indices = np.where(np.any(qpos_delta > EPS, axis=1))[0]
@@ -132,6 +140,7 @@ class HDF5VLADataset:
             # We randomly sample a timestep
             step_id = np.random.randint(first_idx-1, num_steps)
             
+            ## TODO, 取得文本數據集
             # Load the instruction
             dir_path = os.path.dirname(file_path)
             with open(os.path.join(dir_path, 'expanded_instruction_gpt-4-turbo.json'), 'r') as f_instr:
@@ -155,14 +164,17 @@ class HDF5VLADataset:
                 "instruction": instruction
             }
             
+            ## TODO, 這裏是雙臂情況, 前六個是關節, 第七個是夾子, 
             # Rescale gripper to [0, 1]
             qpos = qpos / np.array(
                [[1, 1, 1, 1, 1, 1, 4.7908, 1, 1, 1, 1, 1, 1, 4.7888]] 
             )
+            ## Action儲存在hdf5的根目錄上, 與ACT一致
             target_qpos = f['action'][step_id:step_id+self.CHUNK_SIZE] / np.array(
                [[1, 1, 1, 1, 1, 1, 11.8997, 1, 1, 1, 1, 1, 1, 13.9231]] 
             )
             
+            ## 計算統計量以歸一化
             # Parse the state and action
             state = qpos[step_id:step_id+1]
             state_std = np.std(qpos, axis=0)
@@ -170,16 +182,25 @@ class HDF5VLADataset:
             state_norm = np.sqrt(np.mean(qpos**2, axis=0))
             actions = target_qpos
             if actions.shape[0] < self.CHUNK_SIZE:
+                ## 用最後一個action填充
                 # Pad the actions using the last action
                 actions = np.concatenate([
                     actions,
                     np.tile(actions[-1:], (self.CHUNK_SIZE-actions.shape[0], 1))
                 ], axis=0)
             
+            ## TODO, 改成xArm空間表示
+            '''
+             If your robot is single-arm, 
+             please fill its action into the right-arm portion of the unified action vector, 
+             aligning with our pre-training datasets.
+            '''
+            ## 按照統一物理空間表示方法, 填入state和action等值輸出滿足表示的向量
             # Fill the state/action into the unified vector
             def fill_in_state(values):
                 # Target indices corresponding to your state space
                 # In this example: 6 joints + 1 gripper for each arm
+                ## STATE_VEC_IDX_MAPPING在state_vec按自由度每維定義
                 UNI_STATE_INDICES = [
                     STATE_VEC_IDX_MAPPING[f"left_arm_joint_{i}_pos"] for i in range(6)
                 ] + [
@@ -189,9 +210,13 @@ class HDF5VLADataset:
                 ] + [
                     STATE_VEC_IDX_MAPPING["right_gripper_open"]
                 ]
+                
+                ## 直接生成一個全零的array作為統一物理空間向量的初始化, 然後將對應的維度填入
                 uni_vec = np.zeros(values.shape[:-1] + (self.STATE_DIM,))
                 uni_vec[..., UNI_STATE_INDICES] = values
                 return uni_vec
+            
+            ## 統計量也填入
             state = fill_in_state(state)
             state_indicator = fill_in_state(np.ones_like(state_std))
             state_std = fill_in_state(state_std)
@@ -204,7 +229,10 @@ class HDF5VLADataset:
             # Parse the images
             def parse_img(key):
                 imgs = []
+                ## 考慮歷史圖片信息, 把考慮到的圖片統一存到array
+                ## IMG_HISORY_SIZE定義考慮的歷史信息範圍
                 for i in range(max(step_id-self.IMG_HISORY_SIZE+1, 0), step_id+1):
+                    ## image結構和act的hdf5也一致
                     img = f['observations']['images'][key][i]
                     imgs.append(cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR))
                 imgs = np.stack(imgs)
@@ -215,10 +243,13 @@ class HDF5VLADataset:
                         imgs
                     ], axis=0)
                 return imgs
+            
+            ## TODO, 這篇要把cam name改成數據集的cam name
             # `cam_high` is the external camera image
             cam_high = parse_img('cam_high')
             # For step_id = first_idx - 1, the valid_len should be one
             valid_len = min(step_id - (first_idx - 1) + 1, self.IMG_HISORY_SIZE)
+            ## cam_high_mask是用來標記cam_high的有效性, 這裏的valid_len是從第一個有效的cam_high開始到當前的cam_high
             cam_high_mask = np.array(
                 [False] * (self.IMG_HISORY_SIZE - valid_len) + [True] * valid_len
             )
@@ -246,7 +277,8 @@ class HDF5VLADataset:
                 "cam_right_wrist": cam_right_wrist,
                 "cam_right_wrist_mask": cam_right_wrist_mask
             }
-
+    
+    ## 和上面parse_hdf5_file類似, 只是這裏只需要return state和action
     def parse_hdf5_file_state_only(self, file_path):
         """[Modify] Parse a hdf5 file to generate a state trajectory.
 
@@ -279,6 +311,7 @@ class HDF5VLADataset:
             else:
                 raise ValueError("Found no qpos that exceeds the threshold.")
             
+            ## TODO
             # Rescale gripper to [0, 1]
             qpos = qpos / np.array(
                [[1, 1, 1, 1, 1, 1, 4.7908, 1, 1, 1, 1, 1, 1, 4.7888]] 
@@ -291,6 +324,7 @@ class HDF5VLADataset:
             state = qpos[first_idx-1:]
             action = target_qpos[first_idx-1:]
             
+            ## TODO
             # Fill the state/action into the unified vector
             def fill_in_state(values):
                 # Target indices corresponding to your state space

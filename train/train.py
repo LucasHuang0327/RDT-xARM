@@ -71,9 +71,8 @@ This is a RDT model derived from {base_model}. The weights were trained using [R
     with open(os.path.join(repo_folder, "README.md"), "w") as f:
         f.write(yaml + model_card)
 
-
 def train(args, logger):
-    # Read the config
+    # Read the config 讀取 YAML 配置
     with open(args.config_path, "r") as fp:
         config = yaml.safe_load(fp)
 
@@ -96,6 +95,7 @@ def train(args, logger):
             raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
 
     # Make one log on every process with the configuration for debugging.
+    # 設置日誌、隨機種子、創建輸出目錄等
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
@@ -131,17 +131,21 @@ def train(args, logger):
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
     
+
+
+    # 初始化T5Embedder編碼器
     if args.precomp_lang_embed:
         tokenizer, text_encoder = None, None
     else:
         text_embedder = T5Embedder(from_pretrained=args.pretrained_text_encoder_name_or_path, 
                                 model_max_length=config["dataset"]["tokenizer_max_length"], device=accelerator.device)
         tokenizer, text_encoder = text_embedder.tokenizer, text_embedder.model
-
+    # 初始化SiglipVisionTower編碼器
     vision_encoder = SiglipVisionTower(vision_tower=args.pretrained_vision_encoder_name_or_path, args=None)
     image_processor = vision_encoder.image_processor
 
     # Load from a pretrained checkpoint
+    # 利用RDTRunner類來加載模型權重
     if (
         args.pretrained_model_name_or_path is not None
         and not os.path.isfile(args.pretrained_model_name_or_path)
@@ -177,7 +181,8 @@ def train(args, logger):
             dtype=weight_dtype,
         )
         
-                                                                       
+    # Initialize the model
+    # RDT模型                                                     
     ema_rdt = copy.deepcopy(rdt)
     ema_model = EMAModel(
         ema_rdt,
@@ -199,20 +204,29 @@ def train(args, logger):
 
     accelerator.register_save_state_pre_hook(save_model_hook)
     
+    
+    # 初始化梯度權重
     if args.gradient_checkpointing:
         # TODO: 
         raise NotImplementedError("Gradient checkpointing is not yet implemented.")
 
-    # Enable TF32 for faster training on Ampere GPUs,
+    # Enable TF32 for faster training on Ampere GPUs(消費級顯卡架構, A800也有)
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
+    # 設定PyTorch的TF32模式
     if args.allow_tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
 
+    # 初始化學習率rate
+    # gradient_accumulation_steps是類積多少步才更新一次梯度的參數, 允許更大的batch size
+    # num_processes是當前使用的GPU數量
+    # 
     if args.scale_lr:
+        # Scale learning rate by the number of GPUs, gradient accumulation steps, and batch size
         args.learning_rate = (
             args.learning_rate * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes
         )
 
+    # 初始化優化器
     # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
     if args.use_8bit_adam:
         try:
@@ -236,6 +250,7 @@ def train(args, logger):
         eps=args.adam_epsilon,
     )
     
+    # 使用VLAConsumer Dataset加載數據集
     # Dataset and DataLoaders creation:                                                           
     train_dataset = VLAConsumerDataset(
         config=config["dataset"],
@@ -266,16 +281,17 @@ def train(args, logger):
         use_precomp_lang_embed=args.precomp_lang_embed,
     )                              
     
+    # 定義數據分配器
     data_collator = DataCollatorForVLAConsumerDataset(tokenizer)                                                        
     
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.train_batch_size,
         shuffle=True,
-        collate_fn=data_collator,
+        collate_fn=data_collator,   # 用來將多筆資料組合成一個 batch 的函數。
         num_workers=args.dataloader_num_workers,
-        pin_memory=True,
-        persistent_workers=True
+        pin_memory=True,            # 將資料預先放到 CUDA 的 page-locked memory，提升 GPU 資料傳輸速度。
+        persistent_workers=True     # worker 會在整個訓練過程中持續存在，不會每個 epoch 重啟，能減少初始化開銷
     )
     sample_dataloader = torch.utils.data.DataLoader(
         sample_dataset,
@@ -287,6 +303,8 @@ def train(args, logger):
         persistent_workers=True
     )
     
+    # 將數據分配器和優化器傳遞給加速器
+    # Accelerator管理多個 GPU 上進行分佈式訓練, 只寫一份代碼就能在不同硬件上運行
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -308,6 +326,7 @@ def train(args, logger):
         rdt, optimizer, train_dataloader, sample_dataloader, lr_scheduler                   
     )
 
+    
     ema_rdt.to(accelerator.device, dtype=weight_dtype)                                                                             
 
     if text_encoder is not None:
@@ -317,6 +336,7 @@ def train(args, logger):
         vision_encoder.vision_tower.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
+    # 由梯度更新累積次數, 確保每epoch的訓練步長
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     if overrode_max_train_steps:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
@@ -326,9 +346,14 @@ def train(args, logger):
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
+        # trackers 用於訓練過程的監控與記錄, 初始化以下的 trackers
+            # TensorBoard
+            # Weights & Biases (wandb)
+            # CSV 文件
         accelerator.init_trackers("roboticDiffusionTransformer", config=vars(args))
 
-    # Train!
+    # Train! 
+    # total batch size是所有機器的在指定累積步數內總計的batch_size
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     logger.info("***** Running training *****")

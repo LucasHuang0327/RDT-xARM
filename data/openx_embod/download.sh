@@ -69,15 +69,39 @@ for dataset_name in "${DATASETS[@]}"; do
     echo "Downloading $dataset_name"
 
     # Execute gsutil command
-    ~/miniconda3/envs/rdt-data/bin/gsutil -m cp -n -r -D "gs://gresearch/robotics/$dataset_name" ../datasets/openx_embod/
-    
-    # Check if the resulting directory exists
+    /opt/conda/envs/rdt-data/bin/gsutil -m cp -n -r -D "gs://gresearch/robotics/$dataset_name" ../datasets/openx_embod/
+   
+    # ...existing code...
+    # 检查目录是否存在
     directory_path="../datasets/openx_embod/$dataset_name"
     if [ ! -d "$directory_path" ]; then
-        # If the directory does not exist, then print an error message
         echo "Failed to download $dataset_name"
     else
-        # If the directory exists, then print a success message
         echo "Successfully downloaded $dataset_name"
+        
+        # 上传数据集
+        rayfile-c -a qdefile.hpccube.com -P 65012 -u huangaowei -w b1ed11352f4719a495-7449-4548-81b9-1247212a290b -tm -no-meta -symbolic-links follow -retry 10 -retrytimeout 30 -o upload -d /SothisAI/dataset/ExternalSource/OpenX/$dataset_name -s "$directory_path"
+        
+        # 检查上传是否成功（可选：根据 rayfile-c 的返回值判断）
+        if [ $? -eq 0 ]; then
+            # 上传成功后删除本地数据集
+            rm -rf "$directory_path"
+            echo "Deleted local dataset $dataset_name to save space."
+        else
+            echo "Upload failed for $dataset_name, local data not deleted."
+        fi
     fi
+ 
+# Check if the resulting directory exists
+#    directory_path="../datasets/openx_embod/$dataset_name"
+#    if [ ! -d "$directory_path" ]; then
+#        # If the directory does not exist, then print an error message
+#        echo "Failed to download $dataset_name"
+#    else
+#        # If the directory exists, then print a success message
+#        echo "Successfully downloaded $dataset_name"
+#    fi
+#
+#    rayfile-c -a qdefile.hpccube.com -P 65012 -u huangaowei -w b1ed11352f4719a495-7449-4548-81b9-1247212a290b -tm -no-meta -symbolic-links follow -retry 10 -retrytimeout 30 -o upload -d /SothisAI/dataset/ExternalSource/OpenX -s <请输入上传目标文件夹全路径并替换尖括号及本内容>
+
 done
