@@ -17,6 +17,7 @@ import copy
 import logging
 import math
 import os
+import time
 from pathlib import Path
 
 import diffusers
@@ -151,6 +152,19 @@ def train(args, logger):
         and not os.path.isfile(args.pretrained_model_name_or_path)
     ):
         logger.info("Constructing model from pretrained checkpoint.")
+        
+        ## RDTRUNNER定義了diffusion model
+        ## BUG: 
+        # ERROR: rdt的輸入horizon和x_pos_embed的horizon不一致, 在rdt_runner中的forward函數中x+x_pos_embed
+        # The size of tensor a (53) must match the size of tensor b (67) at non-singleton dimension 1
+        # 
+        # x_pos_embed:
+        # horizon 是由RDT類init函數中的self.horizon參數決定的, 由config["common"]["action_chunk_size"]傳入
+        # horizon決定x_pos_embed axis=1的長度, 為horizon+3 = 67
+        #
+        # x:
+        # 由forward傳入, 
+        #
         rdt = RDTRunner.from_pretrained(args.pretrained_model_name_or_path)
     else:
         logger.info("Constructing model from provided config.")
@@ -352,7 +366,7 @@ def train(args, logger):
             # CSV 文件
         accelerator.init_trackers("roboticDiffusionTransformer", config=vars(args))
 
-    # Train! 
+#======================Train!======================#
     # total batch size是所有機器的在指定累積步數內總計的batch_size
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
@@ -367,6 +381,7 @@ def train(args, logger):
     global_step = 0
     first_epoch = 0
     
+    time1 = time.time()
     # Load from a pretrained checkpoint
     if (
         args.resume_from_checkpoint is None 
@@ -377,9 +392,11 @@ def train(args, logger):
         logger.info("Loading from a pretrained checkpoint.")
         checkpoint = torch.load(args.pretrained_model_name_or_path)
         rdt.module.load_state_dict(checkpoint["module"])
+    print(f"Loading pretrained RDT checkpoint time cost {time.time()-time1:.2f}s") ## PRINT!!
    
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
+        time1 = time.time()
         if args.resume_from_checkpoint != "latest":
             path = os.path.basename(args.resume_from_checkpoint)
         else:
@@ -410,6 +427,8 @@ def train(args, logger):
             resume_global_step = global_step * args.gradient_accumulation_steps
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
+        print(f"Resuming checkpoint time cost {time.time()-time1:.2f}s") ## PRINT!!
+
 
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
@@ -427,6 +446,8 @@ def train(args, logger):
         # Forward and backward...
         for batch in train_dataloader:
             with accelerator.accumulate(rdt):
+                
+                time0 = time.time()
                 images = batch["images"].to(dtype=weight_dtype)
                 states = batch["states"].to(dtype=weight_dtype) # (B, T, D_a)
                 # We only use the last state as input
@@ -434,12 +455,21 @@ def train(args, logger):
                 actions = batch["actions"].to(dtype=weight_dtype)
                 state_elem_mask = batch["state_elem_mask"].to(dtype=weight_dtype)
                 ctrl_freqs = batch["ctrl_freqs"]
-                    
+                print(f"Data loaded in {time.time()-time0:.2f}s") ## PRINT!!
+                
+                ## FORWARD
                 with torch.no_grad():
                     batch_size, _, C, H, W = images.shape
+                    
+                    time0 = time.time()
                     image_embeds = vision_encoder(images.reshape(-1, C, H, W)).detach()
                     image_embeds = image_embeds.reshape((batch_size, -1, vision_encoder.hidden_size))
-
+                    print(f"Image computed in {time.time()-time0:.2f}s") ## PRINT!!
+                    
+                    #### TEMP  
+                    time0 = time.time()
+                    ####
+                    
                     lang_attn_mask = batch["lang_attn_mask"]
                     text_embeds = batch["lang_embeds"].to(dtype=weight_dtype) \
                         if args.precomp_lang_embed \
@@ -447,8 +477,13 @@ def train(args, logger):
                             input_ids=batch["input_ids"],
                             attention_mask=lang_attn_mask
                         )["last_hidden_state"].detach()
-                
+                    
+                    print(f"Instruction computed in {time.time()-time0:.2f}s") ## PRINT!!
+                     
                 state_elem_mask = state_elem_mask.unsqueeze(1)
+                
+                ## 計算loss
+                time0 = time.time()
                 loss = rdt(
                     lang_tokens=text_embeds,
                     lang_attn_mask=lang_attn_mask,
@@ -459,28 +494,41 @@ def train(args, logger):
                     ctrl_freqs=ctrl_freqs
                 )
 
+                ## BACKWARD
                 accelerator.backward(loss)
+                print(f"Loss computed in {time.time()-time0:.2f}s") ## PRINT!!
+                
+                time0 = time.time()
                 if accelerator.sync_gradients:
                     params_to_clip = rdt.parameters()
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)
-            
+                print(f"Optimizer step in {time.time()-time0:.2f}s") ## PRINT!!
+                
+            time0 = time.time()
             ema_model.step(accelerator.unwrap_model(rdt))
-
+            print(f"EMA step in {time.time()-time0:.2f}s") ## PRINT!!
+            
             # Checks if the accelerator has performed an optimization step behind the scenes
+            ## accelerator.sync_gradients=True在多設備訓練時，每個設備計算自己的梯度，
+            # 然後將這些梯度同步（平均或累加），確保所有設備的模型參數更新一致。
+            
+            # 这段代码主要负责在训练过程中定期保存模型检查点（checkpoint）和采样日志
             if accelerator.sync_gradients:
-                progress_bar.update(1)
+                progress_bar.update(1) ## tqdm bar更新
                 global_step += 1
 
-                if global_step % args.checkpointing_period == 0:
+                # 判斷是否需要保存模型檢查點
+                if global_step % args.checkpointing_period == 0: 
                     save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                     accelerator.save_state(save_path)
                     ema_save_path = os.path.join(save_path, f"ema")
                     accelerator.save_model(ema_rdt, ema_save_path)
                     logger.info(f"Saved state to {save_path}")
 
+                # 判斷是否需要保存采樣日誌
                 if args.sample_period > 0 and global_step % args.sample_period == 0:
                     sample_loss_for_log = log_sample_res(
                         text_encoder,

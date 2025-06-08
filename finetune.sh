@@ -6,7 +6,7 @@ export NCCL_NVLS_ENABLE=0
 
 export TEXT_ENCODER_NAME="google/t5-v1_1-xxl"
 export VISION_ENCODER_NAME="google/siglip-so400m-patch14-384"
-export OUTPUT_DIR="./checkpoints/rdt-finetune-1b"
+export OUTPUT_DIR="./checkpoints/rdt-coke-finetune-1b"
 export CFLAGS="-I/usr/include"
 export LDFLAGS="-L/usr/lib/x86_64-linux-gnu"
 export CUTLASS_PATH="/path/to/cutlass"
@@ -34,7 +34,7 @@ deepspeed --hostfile=hostfile.txt main.py \
     --train_batch_size=32 \
     --sample_batch_size=64 \
     --max_train_steps=200000 \
-    --checkpointing_period=1000 \
+    --checkpointing_period=250 \
     --sample_period=500 \
     --checkpoints_total_limit=40 \
     --lr_scheduler="constant" \
@@ -45,7 +45,8 @@ deepspeed --hostfile=hostfile.txt main.py \
     --dataset_type="finetune" \
     --state_noise_snr=40 \
     --load_from_hdf5 \
-    --report_to=wandb
+    --report_to=wandb \
+    --resum
 
     # Use this to resume training from some previous checkpoint
     # --resume_from_checkpoint="checkpoint-36000" \

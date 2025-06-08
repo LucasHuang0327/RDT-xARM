@@ -65,7 +65,6 @@ class TimestepEmbedder(nn.Module):
         t_emb = self.mlp(t_freq)
         return t_emb
 
-
 #################################################################################
 #                          Cross Attention Layers                               #
 #################################################################################
@@ -137,7 +136,6 @@ class CrossAttention(nn.Module):
             x = self.proj_drop(x)
         return x
 
-
 #################################################################################
 #                                 RDT Block                                     #
 #################################################################################
@@ -182,7 +180,6 @@ class RDTBlock(nn.Module):
         
         return x
 
-
 class FinalLayer(nn.Module):
     """
     The final layer of RDT.
@@ -200,7 +197,6 @@ class FinalLayer(nn.Module):
         x = self.norm_final(x)
         x = self.ffn_final(x)
         return x
-
 
 #################################################################################
 #                   Sine/Cosine Positional Embedding Functions                  #
@@ -227,7 +223,6 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
     return emb
-
 
 def get_nd_sincos_pos_embed_from_grid(embed_dim, grid_sizes):
     """
@@ -257,7 +252,6 @@ def get_nd_sincos_pos_embed_from_grid(embed_dim, grid_sizes):
         valid_size_idx += 1
     return emb
 
-
 def get_multimodal_cond_pos_embed(embed_dim, mm_cond_lens: OrderedDict, 
                                   embed_modality=True):
     """
@@ -267,10 +261,12 @@ def get_multimodal_cond_pos_embed(embed_dim, mm_cond_lens: OrderedDict,
         (modality name, modality token length) pairs.
         For `"image"` modality, the value can be a multi-dimensional tuple.
         If the length < 0, it means there is no position embedding for the modality or grid.
+
     embed_modality: whether to embed the modality information. Default is True.
     """
     num_modalities = len(mm_cond_lens)
     modality_pos_embed = np.zeros((num_modalities, embed_dim))
+    
     if embed_modality:
         # Get embeddings for various modalites
         # We put it in the first half

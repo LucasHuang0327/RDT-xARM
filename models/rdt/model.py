@@ -18,7 +18,6 @@ from models.rdt.blocks import (FinalLayer, RDTBlock, TimestepEmbedder,
                                get_1d_sincos_pos_embed_from_grid,
                                get_multimodal_cond_pos_embed)
 
-
 class RDT(nn.Module):
     """
     Class for Robotics Diffusion Transformers.
@@ -52,6 +51,7 @@ class RDT(nn.Module):
         # [timestep; state; action]
         self.x_pos_embed = nn.Parameter(
             torch.zeros(1, horizon+3, hidden_size))
+
         # Language conditions
         self.lang_cond_pos_embed = nn.Parameter(
             torch.zeros(1, max_lang_cond_len, hidden_size))
@@ -66,7 +66,7 @@ class RDT(nn.Module):
         self.initialize_weights()
 
     def initialize_weights(self):
-        # Initialize transformer layers:
+        # Initialize transformer(? 不該是綫性層嗎) layers:
         def _basic_init(module):
             if isinstance(module, nn.Linear):
                 torch.nn.init.xavier_uniform_(module.weight)
@@ -84,7 +84,7 @@ class RDT(nn.Module):
                 ('action', self.horizon),
             ])
         )
-        self.x_pos_embed.data.copy_(torch.from_numpy(x_pos_embed).float().unsqueeze(0))
+        self.x_pos_embed.data.copy_(torch.from_numpy(x_pos_embed).float().unsqueeze(0)) #(1, T_x, D)
 
         if self.lang_pos_embed_config is None:
             lang_cond_pos_embed = get_1d_sincos_pos_embed_from_grid(
@@ -140,6 +140,7 @@ class RDT(nn.Module):
         """
         t = self.t_embedder(t).unsqueeze(1)             # (B, 1, D) or (1, 1, D)
         freq = self.freq_embedder(freq).unsqueeze(1)    # (B, 1, D)
+
         # Append timestep to the input tokens
         if t.shape[0] == 1:
             t = t.expand(x.shape[0], -1, -1)
@@ -147,15 +148,16 @@ class RDT(nn.Module):
         
         # Add multimodal position embeddings
         x = x + self.x_pos_embed
-        # Note the lang is of variable length
+        
+        # Note the lang is of variable length HACK: 
         lang_c = lang_c + self.lang_cond_pos_embed[:, :lang_c.shape[1]]
-        img_c = img_c + self.img_cond_pos_embed
+        img_c = img_c + self.img_cond_pos_embed[:, :img_c.shape[1]]
 
         # Forward pass
         conds = [lang_c, img_c]
         masks = [lang_mask, img_mask]
         for i, block in enumerate(self.blocks):
-            c, mask = conds[i%2], masks[i%2]
+            c, mask = conds[i%2], masks[i%2]            # ACI：交叉引入conds和mask到block
             x = block(x, c, mask)                       # (B, T+1, D)
         # Inject the language condition at the final layer
         x = self.final_layer(x)                         # (B, T+1, out_channels)

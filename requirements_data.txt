@@ -1,4 +1,3 @@
-tfds-nightly==4.9.4.dev202402070044
 gsutil==5.27
 tensorflow==2.15.0.post1
 pillow==10.2.0

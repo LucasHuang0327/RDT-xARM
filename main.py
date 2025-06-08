@@ -4,7 +4,6 @@ from train.train import train
 
 from accelerate.logging import get_logger
 
-
 def parse_args(input_args=None):
     parser = argparse.ArgumentParser(description="Main script for training RDT.")
     parser.add_argument(
@@ -292,7 +291,6 @@ def parse_args(input_args=None):
         args.local_rank = env_local_rank
 
     return args
-
 
 if __name__ == "__main__":
     logger = get_logger(__name__)

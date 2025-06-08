@@ -6,7 +6,7 @@ export NCCL_NVLS_ENABLE=0
 
 export TEXT_ENCODER_NAME="google/t5-v1_1-xxl"
 export VISION_ENCODER_NAME="google/siglip-so400m-patch14-384"
-export OUTPUT_DIR="./checkpoints/rdt-finetune-1b-sim"
+export OUTPUT_DIR="./checkpoints/rdt-coke-finetune-1b-sim"
 export CFLAGS="-I/usr/include"
 export LDFLAGS="-L/usr/lib/x86_64-linux-gnu"
 export CUTLASS_PATH="/data/lingxuan/cutlass"

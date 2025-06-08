@@ -7,6 +7,9 @@ import yaml
 import cv2
 import numpy as np
 
+import io
+from PIL import Image, UnidentifiedImageError
+
 from configs.state_vec import STATE_VEC_IDX_MAPPING
 
 
@@ -19,9 +22,9 @@ class HDF5VLADataset:
         # [Modify] The path to the HDF5 dataset directory
         # Each HDF5 file contains one episode
         
-        ## TODO
-        HDF5_DIR = "data/datasets/agilex/rdt_data/"
-        self.DATASET_NAME = "agilex"
+
+        HDF5_DIR = "/root/private_data/RoboticsDiffusionTransformer/data/datasets/coke"
+        self.DATASET_NAME = "coke"
         
         self.file_paths = []
         for root, _, files in os.walk(HDF5_DIR):
@@ -109,15 +112,16 @@ class HDF5VLADataset:
                                                 # or (IMG_HISORY_SIZE, 0, 0, 0) if unavailable.
                     "cam_high_mask": ndarray,   # indicates the validness of each timestep, (IMG_HISORY_SIZE,) boolean array.
                                                 # For the first IMAGE_HISTORY_SIZE-1 timesteps, the mask should be False.
-                    "cam_left_wrist": ndarray,  # left wrist camera image, (IMG_HISORY_SIZE, H, W, 3).
+                    "cam_wrist": ndarray,  # left wrist camera image, (IMG_HISORY_SIZE, H, W, 3).
                                                 # or (IMG_HISORY_SIZE, 0, 0, 0) if unavailable.
-                    "cam_left_wrist_mask": ndarray,
+                    "cam_wrist_mask": ndarray,
                     "cam_right_wrist": ndarray, # right wrist camera image, (IMG_HISORY_SIZE, H, W, 3).
                                                 # or (IMG_HISORY_SIZE, 0, 0, 0) if unavailable.
                                                 # If only one wrist, make it right wrist, plz.
                     "cam_right_wrist_mask": ndarray
                 } or None if the episode is invalid.
         """
+
         with h5py.File(file_path, 'r') as f:
             # 以observations作枝存的qpos
             qpos = f['observations']['qpos'][:]
@@ -140,21 +144,25 @@ class HDF5VLADataset:
             # We randomly sample a timestep
             step_id = np.random.randint(first_idx-1, num_steps)
             
-            ## TODO, 取得文本數據集
+            ##取得文本數據集
             # Load the instruction
-            dir_path = os.path.dirname(file_path)
-            with open(os.path.join(dir_path, 'expanded_instruction_gpt-4-turbo.json'), 'r') as f_instr:
-                instruction_dict = json.load(f_instr)
-            # We have 1/3 prob to use original instruction,
-            # 1/3 to use simplified instruction,
-            # and 1/3 to use expanded instruction.
-            instruction_type = np.random.choice([
-                'instruction', 'simplified_instruction', 'expanded_instruction'])
-            instruction = instruction_dict[instruction_type]
-            if isinstance(instruction, list):
-                instruction = np.random.choice(instruction)
+
+            ## ORIGINAL
+            # dir_path = os.path.dirname(file_path)
+            # with open(os.path.join(dir_path, 'expanded_instruction_gpt-4-turbo.json'), 'r') as f_instr:
+            #     instruction_dict = json.load(f_instr)
+            # # We have 1/3 prob to use original instruction,
+            # # 1/3 to use simplified instruction,
+            # # and 1/3 to use expanded instruction.
+            # instruction_type = np.random.choice([
+            #     'instruction', 'simplified_instruction', 'expanded_instruction'])
+            # instruction = instruction_dict[instruction_type]
+            # if isinstance(instruction, list):
+            #     instruction = np.random.choice(instruction)
+            
             # You can also use precomputed language embeddings (recommended)
-            # instruction = "path/to/lang_embed.pt"
+            instruction = "/root/private_data/RoboticsDiffusionTransformer/data/empty_lang_embed.pt"
+            
             
             # Assemble the meta
             meta = {
@@ -167,11 +175,11 @@ class HDF5VLADataset:
             ## TODO, 這裏是雙臂情況, 前六個是關節, 第七個是夾子, 
             # Rescale gripper to [0, 1]
             qpos = qpos / np.array(
-               [[1, 1, 1, 1, 1, 1, 4.7908, 1, 1, 1, 1, 1, 1, 4.7888]] 
+               [[1, 1, 1, 1, 1, 1, 800]] 
             )
             ## Action儲存在hdf5的根目錄上, 與ACT一致
             target_qpos = f['action'][step_id:step_id+self.CHUNK_SIZE] / np.array(
-               [[1, 1, 1, 1, 1, 1, 11.8997, 1, 1, 1, 1, 1, 1, 13.9231]] 
+               [[1, 1, 1, 1, 1, 1, 800]] 
             )
             
             ## 計算統計量以歸一化
@@ -189,12 +197,15 @@ class HDF5VLADataset:
                     np.tile(actions[-1:], (self.CHUNK_SIZE-actions.shape[0], 1))
                 ], axis=0)
             
-            ## TODO, 改成xArm空間表示
+            ## 改成xArm空間表示
+            
             '''
-             If your robot is single-arm, 
+            If your robot is single-arm, 
              please fill its action into the right-arm portion of the unified action vector, 
-             aligning with our pre-training datasets.
+            aligning with our pre-training datasets.
             '''
+
+            
             ## 按照統一物理空間表示方法, 填入state和action等值輸出滿足表示的向量
             # Fill the state/action into the unified vector
             def fill_in_state(values):
@@ -202,10 +213,6 @@ class HDF5VLADataset:
                 # In this example: 6 joints + 1 gripper for each arm
                 ## STATE_VEC_IDX_MAPPING在state_vec按自由度每維定義
                 UNI_STATE_INDICES = [
-                    STATE_VEC_IDX_MAPPING[f"left_arm_joint_{i}_pos"] for i in range(6)
-                ] + [
-                    STATE_VEC_IDX_MAPPING["left_gripper_open"]
-                ] + [
                     STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(6)
                 ] + [
                     STATE_VEC_IDX_MAPPING["right_gripper_open"]
@@ -231,10 +238,27 @@ class HDF5VLADataset:
                 imgs = []
                 ## 考慮歷史圖片信息, 把考慮到的圖片統一存到array
                 ## IMG_HISORY_SIZE定義考慮的歷史信息範圍
+                img = f[f'observations/images/{key}'][()]
                 for i in range(max(step_id-self.IMG_HISORY_SIZE+1, 0), step_id+1):
-                    ## image結構和act的hdf5也一致
-                    img = f['observations']['images'][key][i]
-                    imgs.append(cv2.imdecode(np.frombuffer(img, np.uint8), cv2.IMREAD_COLOR))
+                    if isinstance(img[i], np.ndarray):
+                        imgs.append(img[i])
+                    else:
+                        # 如果不是numpy數組，則根據需要處理其他格式
+                        # 下面是之前注釋掉的代碼
+                        # 嘗試用cv2或PIL.Image打開圖片
+                        try:
+                            # 嘗試用cv2解碼
+                            img_arr = cv2.imdecode(np.frombuffer(img[i], np.uint8), cv2.IMREAD_COLOR)
+                            if img_arr is not None:
+                                imgs.append(img_arr)
+                            else:
+                                # 如果cv2失敗，嘗試用PIL
+                                img_pil = Image.open(io.BytesIO(img[i]))
+                                imgs.append(np.array(img_pil))
+                        except Exception as e:
+                            print(f"Failed to decode image at index {i}: {e}")
+                            # 根據需要決定是否跳過或填充一個空圖像
+
                 imgs = np.stack(imgs)
                 if imgs.shape[0] < self.IMG_HISORY_SIZE:
                     # Pad the images using the first image
@@ -246,21 +270,19 @@ class HDF5VLADataset:
             
             ## TODO, 這篇要把cam name改成數據集的cam name
             # `cam_high` is the external camera image
-            cam_high = parse_img('cam_high')
+            cam_high = parse_img('image_1')
             # For step_id = first_idx - 1, the valid_len should be one
             valid_len = min(step_id - (first_idx - 1) + 1, self.IMG_HISORY_SIZE)
             ## cam_high_mask是用來標記cam_high的有效性, 這裏的valid_len是從第一個有效的cam_high開始到當前的cam_high
             cam_high_mask = np.array(
                 [False] * (self.IMG_HISORY_SIZE - valid_len) + [True] * valid_len
             )
-            cam_left_wrist = parse_img('cam_left_wrist')
-            cam_left_wrist_mask = cam_high_mask.copy()
-            cam_right_wrist = parse_img('cam_right_wrist')
-            cam_right_wrist_mask = cam_high_mask.copy()
+            cam_wrist = parse_img('image_2')
+            cam_wrist_mask = cam_high_mask.copy()
             
             # Return the resulting sample
             # For unavailable images, return zero-shape arrays, i.e., (IMG_HISORY_SIZE, 0, 0, 0)
-            # E.g., return np.zeros((self.IMG_HISORY_SIZE, 0, 0, 0)) for the key "cam_left_wrist",
+            # E.g., return np.zeros((self.IMG_HISORY_SIZE, 0, 0, 0)) for the key "cam_wrist",
             # if the left-wrist camera is unavailable on your robot
             return True, {
                 "meta": meta,
@@ -272,10 +294,8 @@ class HDF5VLADataset:
                 "state_indicator": state_indicator,
                 "cam_high": cam_high,
                 "cam_high_mask": cam_high_mask,
-                "cam_left_wrist": cam_left_wrist,
-                "cam_left_wrist_mask": cam_left_wrist_mask,
-                "cam_right_wrist": cam_right_wrist,
-                "cam_right_wrist_mask": cam_right_wrist_mask
+                "cam_wrist": cam_wrist,
+                "cam_wrist_mask": cam_wrist_mask,
             }
     
     ## 和上面parse_hdf5_file類似, 只是這裏只需要return state和action
@@ -314,10 +334,10 @@ class HDF5VLADataset:
             ## TODO
             # Rescale gripper to [0, 1]
             qpos = qpos / np.array(
-               [[1, 1, 1, 1, 1, 1, 4.7908, 1, 1, 1, 1, 1, 1, 4.7888]] 
+               [[1, 1, 1, 1, 1, 1, 730]] 
             )
             target_qpos = f['action'][:] / np.array(
-               [[1, 1, 1, 1, 1, 1, 11.8997, 1, 1, 1, 1, 1, 1, 13.9231]] 
+               [[1, 1, 1, 1, 1, 1, 730]] 
             )
             
             # Parse the state and action
@@ -330,10 +350,6 @@ class HDF5VLADataset:
                 # Target indices corresponding to your state space
                 # In this example: 6 joints + 1 gripper for each arm
                 UNI_STATE_INDICES = [
-                    STATE_VEC_IDX_MAPPING[f"left_arm_joint_{i}_pos"] for i in range(6)
-                ] + [
-                    STATE_VEC_IDX_MAPPING["left_gripper_open"]
-                ] + [
                     STATE_VEC_IDX_MAPPING[f"right_arm_joint_{i}_pos"] for i in range(6)
                 ] + [
                     STATE_VEC_IDX_MAPPING["right_gripper_open"]
@@ -351,6 +367,16 @@ class HDF5VLADataset:
             }
 
 if __name__ == "__main__":
+    
+    # file_path = "/root/private_data/RoboticsDiffusionTransformer/data/datasets/coke/episode_0.hdf5"
+    # with h5py.File(file_path, 'r') as f:
+    #     img = f["observations"]["images"]["image_1"][()]
+        
+    #     print(f"img.shape:{img.shape}")
+    #     print(type(img), len(img))
+    #     print(img[:10])
+    # exit()
+    
     ds = HDF5VLADataset()
     for i in range(len(ds)):
         print(f"Processing episode {i}/{len(ds)}...")

@@ -248,11 +248,15 @@ class VLAConsumerDataset(Dataset):
                     states = res['state']
                     actions = res['actions']
                     state_elem_mask = res['state_indicator']
-                    image_metas = [
-                        res['cam_high'], res['cam_high_mask'],
-                        res['cam_right_wrist'], res['cam_right_wrist_mask'],
-                        res['cam_left_wrist'], res['cam_left_wrist_mask'],
-                    ]
+                    try:
+                        image_metas = [
+                            res['cam_high'], res['cam_high_mask'],
+                            res['cam_wrist'], res['cam_wrist_mask']
+                        ]
+                        #print(f"image_metas: {image_metas.shape}")
+                    except:
+                        print("image is NONETYPE!!!!")
+                        exit()
                     state_std = res['state_std']
                     state_mean = res['state_mean']
                     state_norm = res['state_norm']
@@ -300,14 +304,17 @@ class VLAConsumerDataset(Dataset):
                 rearranged_images = []
                 for i in range(self.img_history_size):
                     for j in range(self.num_cameras):
-                        images, image_mask = image_metas[j]
-                        image, valid = images[i], image_mask[i]
-                        if valid and (math.prod(image.shape) > 0) and \
-                            (random.random() > mask_probs[j]):
-                            rearranged_images.append((image, True))
-                        else:
-                            rearranged_images.append((background_image.copy(), False))
-                
+                        try:
+                            images, image_mask = image_metas[j]
+                            image, valid = images[i], image_mask[i]
+                            if valid and (math.prod(image.shape) > 0) and \
+                                (random.random() > mask_probs[j]):
+                                rearranged_images.append((image, True))
+                            else:
+                                rearranged_images.append((background_image.copy(), False))
+                        except:
+                            exit()
+
                 preprocessed_images = []
                 processor = self.image_processor
                 for image, valid in rearranged_images:

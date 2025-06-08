@@ -22,6 +22,7 @@ class RDTRunner(
                  max_lang_cond_len, img_cond_len, lang_pos_embed_config=None, 
                  img_pos_embed_config=None, dtype=torch.bfloat16):
         super(RDTRunner, self).__init__()
+        
         # Create diffusion model
         hidden_size = config['rdt']['hidden_size']
         self.model = RDT(
@@ -116,6 +117,7 @@ class RDTRunner(
 
         return adpated_lang, adpated_img, adpated_state
 
+    # 關鍵利用diffusion scheduler和RDT模型生成動作
     def conditional_sample(self, lang_cond, lang_attn_mask, img_cond, 
                            state_traj, action_mask, ctrl_freqs):
         '''
@@ -128,7 +130,7 @@ class RDTRunner(
             indicating the valid action dimensions.
         ctrl_freqs: (batch_size,), control frequency for each sample.
         
-        return: (batch_size, horizon, action_dim)
+        return: noisy_action (batch_size, horizon, action_dim)
         '''
         device = state_traj.device
         dtype = state_traj.dtype
@@ -140,6 +142,8 @@ class RDTRunner(
         # Set step values
         self.noise_scheduler_sample.set_timesteps(self.num_inference_timesteps)
         
+        ## 到底他的DIT是如何運作的？
+        # 逐diffusion時間步生成noisyaction, 直至時間步結束，輸出action
         for t in self.noise_scheduler_sample.timesteps:
             # Prepare state-action trajectory
             action_traj = torch.cat([noisy_action, action_mask], dim=2)
@@ -147,11 +151,13 @@ class RDTRunner(
             state_action_traj = torch.cat([state_traj, action_traj], dim=1)
             
             # Predict the model output
+            # 把 state 和 noise 拼接輸入到模型中
             model_output = self.model(state_action_traj, ctrl_freqs,
                                     t.unsqueeze(-1).to(device),
                                     lang_cond, img_cond, lang_mask=lang_attn_mask)
             
             # Compute previous actions: x_t -> x_t-1
+            # 這個模型是？
             noisy_action = self.noise_scheduler_sample.step(
                 model_output, t, noisy_action).prev_sample
             noisy_action = noisy_action.to(state_traj.dtype)
@@ -184,11 +190,13 @@ class RDTRunner(
         noise = torch.randn(
             action_gt.shape, dtype=action_gt.dtype, device=device
         )
+        
         # Sample random diffusion timesteps
         timesteps = torch.randint(
             0, self.num_train_timesteps, 
             (batch_size,), device=device
         ).long()
+        
         # Add noise to the clean actions according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
         noisy_action = self.noise_scheduler.add_noise(
@@ -196,21 +204,25 @@ class RDTRunner(
         
         # Concatenate the state and action tokens to form the input sequence
         state_action_traj = torch.cat([state_tokens, noisy_action], dim=1)
+        
         # Append the action mask to the input sequence
         action_mask = action_mask.expand(-1, state_action_traj.shape[1], -1)
         state_action_traj = torch.cat([state_action_traj, action_mask], dim=2)
+        
         # Align the dimension with the hidden size
         lang_cond, img_cond, state_action_traj = self.adapt_conditions(
             lang_tokens, img_tokens, state_action_traj)
+        
         # Predict the denoised result
         pred = self.model(state_action_traj, ctrl_freqs, 
                           timesteps, lang_cond, img_cond, 
                           lang_mask=lang_attn_mask)
 
+        # 可以選擇噪音或動作序列作GT
         pred_type = self.prediction_type 
-        if pred_type == 'epsilon':
+        if pred_type == 'epsilon': # 訓練模型以預測噪音
             target = noise
-        elif pred_type == 'sample':
+        elif pred_type == 'sample': # 訓練模型以預測動作
             target = action_gt
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")

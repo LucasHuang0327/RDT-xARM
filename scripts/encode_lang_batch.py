@@ -12,7 +12,7 @@ GPU = 0
 MODEL_PATH = "google/t5-v1_1-xxl"
 CONFIG_PATH = "configs/base.yaml"
 # Modify the TARGET_DIR to your dataset path
-TARGET_DIR = "data/datasets/agilex/tfrecords/"
+TARGET_DIR = "data/datasets/coke"
 
 # Note: if your GPU VRAM is less than 24GB, 
 # it is recommended to enable offloading by specifying an offload directory.
@@ -70,6 +70,11 @@ def main():
         for i in range(len(instructions)):
             text_embed = text_embeds[i][attn_mask[i]]
             save_path = os.path.join(task_path, f"lang_embed_{i}.pt")
+            ## PRINT
+            if os.path.exists(save_path):
+                print(f"File {save_path} already exists. Skipping...")
+                continue
+            
             torch.save(text_embed, save_path)
 
 if __name__ == "__main__":
